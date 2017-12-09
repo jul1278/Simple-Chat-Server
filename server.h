@@ -5,6 +5,7 @@
 #include <iostream>
 
 #include <stdio.h>
+#include <unordered_set>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/poll.h>
@@ -36,19 +37,17 @@ class TCPServer {
     int portno;
 
     socklen_t clilen;
+    time_t lastStreamTime;  
 
     struct pollfd readFds[MAX_CLIENTS]; 
-    struct pollfd workingFds[MAX_CLIENTS]; 
+    std::unordered_set<int> streamClientFds; 
 
     sockaddr_in serv_addr;
     sockaddr_in cli_addr;
 
     int fdCount;
-    
-    void CloseConnection(int socketFd); 
-    bool AcceptIncommingConnection(int socketFd, int numClientSockets);
+
     bool ProcessMessage(const char* buffer, unsigned int size, struct pollfd pollFd);
-    std::string ReadFromSocket(int socketFd); 
 
 public:
     

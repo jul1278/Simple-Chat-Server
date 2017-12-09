@@ -174,9 +174,8 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         return; 
     }
 
-    // FD_ZERO(&this->readFds); 
-    // FD_SET(this->sockfd, &this->readFds);
-    // this->maxSd = this->sockfd; 
+    this->lastStreamTime = std::time(nullptr); 
+
     this->fdCount = 1; 
     this->readFds[0].fd = this->sockfd; 
     this->readFds[0].events = POLL_IN; 
@@ -194,69 +193,36 @@ TCPServer::~TCPServer() {
 }
 
 //--------------------------------------------------------------------------------------------------------
-// Name: Connected
-// Desc:
-//--------------------------------------------------------------------------------------------------------
-bool TCPServer::AcceptIncommingConnection(int socketFd, int numClientSockets) {
-    
-    bool connectionResult = true; 
-    
-    // struct sockaddr_in clientAddress; 
-    // socklen_t clientAddressLen = sizeof(clientAddress); 
-    
-    // int newConnectionSocketFd = accept(socketFd, (struct sockaddr*) &clientAddress, &clientAddressLen);  
-
-    // if (newConnectionSocketFd >= 0) 
-    // {
-    //     FD_SET(newConnectionSocketFd, &this->readFds); 
-
-    //     struct sockaddr_in addr; 
-    //     int addrLen; 
-
-    //     if(getpeername(newConnectionSocketFd, (sockaddr*) &addr, (socklen_t*) &addrLen) != -1) {
-                
-    //         // inet_ntoa() converts host address to IPV$ dotted-decimal notation 
-    //         // ntoh() convert network byte order to host byte order
-    //         std::cout << "Client " << inet_ntoa(addr.sin_addr) << " - " << ntohs(addr.sin_port) << "\n";
-    //     }
-
-    //     // read the socket and print out the message we got
-    //     auto message = this->ReadFromSocket(newConnectionSocketFd); 
-
-    //     if (message.length() > 0) {
-    //         std::cout << message << "\n";
-
-    //         auto pos = message.find("/event_src.php"); 
-
-    //         if (pos != std::string::npos) {
-    //             auto response = BuildSSEResponse();
-
-    //             if (write(newConnectionSocketFd, response.c_str(), response.length()) == -1) {
-    //                 connectionResult = false; 
-    //             }
-    //         } else {
-
-    //             auto response = BuildHttpResponseSSE(); 
-
-    //             if (write(newConnectionSocketFd, response.c_str(), response.length()) == -1) {
-    //                 connectionResult = false; 
-    //             }
-    //         }
-
-    //     }
-    // }
-
-    return connectionResult; 
-}
-
-//--------------------------------------------------------------------------------------------------------
 // Name: GetMessage
 // Desc: 
 //--------------------------------------------------------------------------------------------------------
 bool TCPServer::GetMessage(std::string& message) {
 
-    // copy to working fd set   
-    memcpy((void*) &this->workingFds, (void*) &this->readFds, sizeof(this->readFds)); 
+    // stream updates to clients first
+    auto t = std::time(nullptr); 
+    auto currentTime = *std::localtime(&t); 
+    auto delta = difftime(t, this->lastStreamTime); 
+
+    if (delta >= 1.0) {
+        for (auto fd : this->streamClientFds) {
+
+            auto response = BuildSSEResponse(); 
+
+            char timeStr[100]; 
+            std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &currentTime);
+
+            response += "\r\nretry: 15000\r\n";     
+            response += "data: ";
+            response += timeStr; 
+            response += "\r\n\r\n";  
+
+            if (send(fd, response.c_str(), response.length(), 0) == -1) {
+                std::cout << "send() error\n"; 
+            }
+        }
+
+        this->lastStreamTime = t; 
+    }
 
     auto activity = poll(this->readFds, MAX_CLIENTS, 0); 
 
@@ -301,7 +267,7 @@ bool TCPServer::GetMessage(std::string& message) {
                         socklen_t len = sizeof(addr); 
 
                         auto result = getpeername(newConnectionSocketFd, (struct sockaddr*) &addr, &len); 
-                        std::cout << "Incomming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
+                        std::cout << "Incoming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
 
                     } else {
 
@@ -343,31 +309,10 @@ bool TCPServer::GetMessage(std::string& message) {
                 }
             }
         }
+
     }
 
     return true; 
-}
-
-//--------------------------------------------------------------------------------------------------------
-// Name: ProcessMessage
-// Desc:
-//--------------------------------------------------------------------------------------------------------
-std::string TCPServer::ReadFromSocket(int socketFd) {
-
-        char buffer[1024];
-        memset(buffer, 0, 1024); 
-
-        // TODO: validate socketFd??
-
-        // data has arrived from an already connected socket
-        auto bytesRead = read(socketFd, (void*)buffer, 1024); 
-
-        if (bytesRead > 0) {
-
-            buffer[bytesRead] = 0; 
-        }
-
-    return std::string(buffer);
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -390,20 +335,8 @@ bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pol
 
     } else if (message.find("GET /event_src.php HTTP/1.1") != std::string::npos) {
 
-        auto response = BuildSSEResponse(); 
-
-        auto t = std::time(nullptr); 
-        auto localTime = *std::localtime(&t); 
-        char timeStr[100]; 
-        std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &localTime);
-
-        response += "\r\nretry: 15000\r\n";     
-        response += "data: ";
-        response += timeStr; 
-        response += "\r\n\r\n";  
-
-        if (send(pollFd.fd, response.c_str(), response.length(), 0) == -1) {
-            std::cout << "send() error\n"; 
+        if (this->streamClientFds.find(pollFd.fd) == this->streamClientFds.end()) {
+            this->streamClientFds.insert(pollFd.fd); 
         }
     }
 
