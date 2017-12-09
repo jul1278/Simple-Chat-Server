@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <sys/poll.h>
 #include <netinet/in.h>
 #include <arpa/inet.h> 
 #include <unistd.h>
@@ -35,19 +36,19 @@ class TCPServer {
     int portno;
 
     socklen_t clilen;
-    fd_set readFds; 
+
+    struct pollfd readFds[MAX_CLIENTS]; 
+    struct pollfd workingFds[MAX_CLIENTS]; 
 
     sockaddr_in serv_addr;
     sockaddr_in cli_addr;
 
-    std::string chatLog;  
-
-    int maxSd = 0; 
-
-    int clientSockets[MAX_CLIENTS];
-
+    int fdCount;
+    
+    void CloseConnection(int socketFd); 
     bool AcceptIncommingConnection(int socketFd, int numClientSockets);
-    bool ProcessMessage(int socketIndex, const char* buffer, unsigned int bytesRead);
+    bool ProcessMessage(const char* buffer, unsigned int size, struct pollfd pollFd);
+    std::string ReadFromSocket(int socketFd); 
 
 public:
     

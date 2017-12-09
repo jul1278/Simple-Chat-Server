@@ -9,6 +9,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/poll.h>
 #include <arpa/inet.h> 
 #include <unistd.h>
 #include <sys/time.h> 
@@ -59,13 +60,13 @@ std::string BuildHttpResponse(std::string message) {
 std::string BuildHttpResponseSSE() {
 
     std::string message = "<!DOCTYPE html><html><body><h1>Getting server updates</h1>"
-        "<div id=\"result\"></div><script>"
-        "if(typeof(EventSource) !== \"undefined\") {"
-            "var source = new EventSource(\"demo_sse.php\");"
-            "source.onmessage = function(event) {"
-            "document.getElementById(\"result\").innerHTML += event.data + \"<br>\";"
-        "} else {"
-            "document.getElementById(\"result\").innerHTML = \"Sorry, your browser does not support server-sent events...\";"
+        "<div id=\"result\"></div><script>\r\n"
+        "if(typeof(EventSource) !== \"undefined\") {\r\n"
+            "var source = new EventSource(\"event_src.php\");\r\n"
+            "source.onmessage = function(event) {\r\n"
+            "document.getElementById(\"result\").innerHTML += event.data + \"<br>\";\r\n};\r\n"
+        "} else {\r\n"
+            "document.getElementById(\"result\").innerHTML = \"Sorry, your browser does not support server-sent events...\";\r\n"
         "} </script></body></html>";
 
     std::string response; 
@@ -92,17 +93,8 @@ std::string BuildSSEResponse() {
     std::string response; 
 
     response += "HTTP/1.1 200 OK\r\n"; 
+    response += "Connection: keep-alive\r\n";
     response += "Content-Type: text/event-stream\r\n";
-    response += "Cache-Control: no-cache\r\n\r\n";
-
-    auto t = std::time(nullptr); 
-    auto localTime = *std::localtime(&t); 
-    char timeStr[100]; 
-    std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H-%M-%S", &localTime);
-    
-    response += "date: ";
-    response += timeStr; 
-    response += "\r\n";  
 
     return response; 
 }
@@ -112,10 +104,6 @@ std::string BuildSSEResponse() {
 // Desc:
 //------------------------------------------------------------------------------------
 TCPServer::TCPServer(const std::string& name, const unsigned int port) {
-    
-    memset(this->clientSockets, 0, MAX_CLIENTS*sizeof(int)); 
-    char buffer[256];
-    unsigned int n;
 
     // create a new socket
     // SOCK_STREAM indicates that we want a TCP socket
@@ -128,18 +116,37 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         return; 
     }
 
+    int on = 1; 
+
+    // Allow socket descriptor to be reuseable
+    if (setsockopt(this->sockfd, SOL_SOCKET,  SO_REUSEADDR, (void*) &on, sizeof(on)) == -1)
+    {
+        std::cout << "setsockopt() failed\n";
+        close(this->sockfd);
+        return; 
+    }
+
+    // Set socket to be nonblocking. 
+    // incomming socket connections inherit from this socket so they will also nonblock 
+    if (fcntl(this->sockfd, F_SETFL, O_NONBLOCK) == -1)
+    {
+        std::cout << "fcntl() failed\n";
+        close(this->sockfd);
+        return;
+    }
+
     memset((char *) &this->serv_addr, 0, sizeof(this->serv_addr));
     
     auto result = -1;
     auto maxNumPorts = 100; 
     auto counter = 0; 
-    
+
+    // INADDR_ANY socket accepts connections to any of the machines IPs
+    this->serv_addr.sin_family = AF_INET;
+    this->serv_addr.sin_addr.s_addr = INADDR_ANY;
+
     // keep trying to bind to ports until we find one
     while (result < 0)  {
-
-        // INADDR_ANY socket accepts connections to any of the machines IPs
-        this->serv_addr.sin_family = AF_INET;
-        this->serv_addr.sin_addr.s_addr = INADDR_ANY;
         this->serv_addr.sin_port = htons(port + counter);
 
         // bind the socket thus associating out socket with an address
@@ -160,12 +167,19 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
     }
 
     // tell the socket that we want to listen for incomming connections
-    if(listen(this->sockfd, 10) < 0) {
+    if(listen(this->sockfd, 32) == -1) {
         this->status = false; 
         std::cout << "listen() failed.\n"; 
 
         return; 
     }
+
+    // FD_ZERO(&this->readFds); 
+    // FD_SET(this->sockfd, &this->readFds);
+    // this->maxSd = this->sockfd; 
+    this->fdCount = 1; 
+    this->readFds[0].fd = this->sockfd; 
+    this->readFds[0].events = POLL_IN; 
 
     this->clilen = sizeof(this->cli_addr);
     this->status = true; 
@@ -187,28 +201,50 @@ bool TCPServer::AcceptIncommingConnection(int socketFd, int numClientSockets) {
     
     bool connectionResult = true; 
     
-    struct sockaddr_in clientAddress; 
-    socklen_t clientAddressLen = sizeof(clientAddress); 
-    auto newConnectionSocketFd = accept(socketFd, (struct sockaddr*) &clientAddress, &clientAddressLen);
+    // struct sockaddr_in clientAddress; 
+    // socklen_t clientAddressLen = sizeof(clientAddress); 
+    
+    // int newConnectionSocketFd = accept(socketFd, (struct sockaddr*) &clientAddress, &clientAddressLen);  
 
-    if (newConnectionSocketFd >= 0) 
-    {
-        // Add connection
-        for (auto i = 0; i < MAX_CLIENTS; i++) {
-            if (this->clientSockets[i] == 0) {
-                this->clientSockets[i] = newConnectionSocketFd; 
-                break; 
-            }
-        }
+    // if (newConnectionSocketFd >= 0) 
+    // {
+    //     FD_SET(newConnectionSocketFd, &this->readFds); 
 
-        auto response = BuildHttpResponse(pageHtml); 
+    //     struct sockaddr_in addr; 
+    //     int addrLen; 
 
-        if (write(newConnectionSocketFd, response.c_str(), response.length()) == -1) {
-            connectionResult = false; 
-        }
-    } else {
-        connectionResult = false; 
-    }
+    //     if(getpeername(newConnectionSocketFd, (sockaddr*) &addr, (socklen_t*) &addrLen) != -1) {
+                
+    //         // inet_ntoa() converts host address to IPV$ dotted-decimal notation 
+    //         // ntoh() convert network byte order to host byte order
+    //         std::cout << "Client " << inet_ntoa(addr.sin_addr) << " - " << ntohs(addr.sin_port) << "\n";
+    //     }
+
+    //     // read the socket and print out the message we got
+    //     auto message = this->ReadFromSocket(newConnectionSocketFd); 
+
+    //     if (message.length() > 0) {
+    //         std::cout << message << "\n";
+
+    //         auto pos = message.find("/event_src.php"); 
+
+    //         if (pos != std::string::npos) {
+    //             auto response = BuildSSEResponse();
+
+    //             if (write(newConnectionSocketFd, response.c_str(), response.length()) == -1) {
+    //                 connectionResult = false; 
+    //             }
+    //         } else {
+
+    //             auto response = BuildHttpResponseSSE(); 
+
+    //             if (write(newConnectionSocketFd, response.c_str(), response.length()) == -1) {
+    //                 connectionResult = false; 
+    //             }
+    //         }
+
+    //     }
+    // }
 
     return connectionResult; 
 }
@@ -219,69 +255,94 @@ bool TCPServer::AcceptIncommingConnection(int socketFd, int numClientSockets) {
 //--------------------------------------------------------------------------------------------------------
 bool TCPServer::GetMessage(std::string& message) {
 
-    FD_ZERO(&this->readFds);
-    FD_SET(this->sockfd, &this->readFds);
+    // copy to working fd set   
+    memcpy((void*) &this->workingFds, (void*) &this->readFds, sizeof(this->readFds)); 
 
-    this->maxSd = this->sockfd; 
+    auto activity = poll(this->readFds, MAX_CLIENTS, 0); 
 
-    for(auto i = 0; i < MAX_CLIENTS; i++) {
-        if (this->clientSockets[i] > 0) {
-            FD_SET(this->clientSockets[i], &this->readFds); 
-        }
-
-        if (this->clientSockets[i] > this->maxSd) {
-            this->maxSd = this->clientSockets[i]; 
-        }
-    }
-
-    auto activity = select(this->maxSd + 1, &this->readFds, nullptr, nullptr, nullptr); 
-
-    if (activity < 0) {
+    if (activity <= 0) {
+        // error or timeout
         return false; 
     }
 
-    for (auto i = 0; i < MAX_CLIENTS; i++) {
+    for (auto i = 0; i < this->fdCount; i++) {
 
-        if (FD_ISSET(i, &this->readFds)) {
+        if (this->readFds[i].revents == 0 || this->readFds[i].revents != POLL_IN) {
+            // nothing happen
+            continue; 
+        }
 
-            // this is an incoming connection
-            if (i == this->sockfd) {
-                auto result = this->AcceptIncommingConnection(this->sockfd, MAX_CLIENTS);
+        // incomming connections on listening socket
+        if (this->readFds[i].fd == this->sockfd) {
             
-            } else {
+            int newConnectionSocketFd = 0;
 
-                char buffer[1024];
-                memset(buffer, 0, 1024); 
+            // listening socket is readable
+            while(newConnectionSocketFd != -1) {
+                struct sockaddr_in clientAddress; 
+                socklen_t clientAddressLen = sizeof(clientAddress); 
 
-                // data has arrived from an already connected socket
-                auto bytesRead = read(i, (void*)buffer, 1024); 
+                // accept new incoming connection
+                newConnectionSocketFd = accept(this->sockfd, (struct sockaddr*) &clientAddress, &clientAddressLen); 
 
-                if (bytesRead > 0) {
+                if (newConnectionSocketFd < 0) {
+                    if (errno != EWOULDBLOCK) { /* error! */ }
+                    break;
 
-                    buffer[bytesRead] = 0; 
-
-                    this->ProcessMessage(i, buffer, bytesRead); 
-
-                    // print what we recieved 
-                    std::cout << buffer << "\n";  
-
-                } else if (bytesRead == 0 && this->clientSockets[i] != 0) {
-
-                    struct sockaddr_in addr; 
-                    int addrLen; 
-
-                    if(getpeername(this->clientSockets[i], (sockaddr*) &addr, (socklen_t*) &addrLen) != -1) {
+                } else {
+                    if (this->fdCount < MAX_CLIENTS) {
                             
-                        // inet_ntoa() converts host address to IPV$ dotted-decimal notation 
-                        // ntoh() convert network byte order to host byte order
-                        std::cout << "Client " << inet_ntoa(addr.sin_addr) << " - " << ntohs(addr.sin_port) << " disconnected.\n";
+                        this->readFds[this->fdCount].fd = newConnectionSocketFd; 
+                        this->readFds[this->fdCount].events = POLL_IN; 
 
-                        close(this->clientSockets[i]); 
-                        this->clientSockets[i] = 0; 
+                        this->fdCount++;
+
+                        struct sockaddr_in addr; 
+                        socklen_t len = sizeof(addr); 
+
+                        auto result = getpeername(newConnectionSocketFd, (struct sockaddr*) &addr, &len); 
+                        std::cout << "Incomming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
+
+                    } else {
+
+                        std::cout << "Can't accept any more connections\n";
+                        break; 
                     }
                 }
+            } 
+        } else {
+            // descriptor is readable 
+
+            while(true) {
+
+                char buffer[1024]; 
+
+                // TODO: what is the last argument
+                auto result = recv(this->readFds[i].fd, (void*)buffer, sizeof(buffer), 0); 
+
+                if (result < 0) {
+                    if (errno != EWOULDBLOCK) {
+                        std::cout << "recv() error\n"; 
+
+                        // TODO: close this connection
+                    }
+
+                    break; 
+
+                } else if (result == 0) {
+
+                    // TODO: close this connection
+                    break;
+
+                } else {
+
+                    buffer[result] = 0; 
+                    std::cout << buffer << "\n";
+
+                    this->ProcessMessage(buffer, result, this->readFds[i]); 
+                }
             }
-        } 
+        }
     }
 
     return true; 
@@ -291,14 +352,61 @@ bool TCPServer::GetMessage(std::string& message) {
 // Name: ProcessMessage
 // Desc:
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::ProcessMessage(int socketIndex, const char* buffer, unsigned int bytesRead) {
-    
-    // split by \r\n things
+std::string TCPServer::ReadFromSocket(int socketFd) {
 
-    // process get/post separately 
+        char buffer[1024];
+        memset(buffer, 0, 1024); 
 
-    // should have a ConnectionInfo or something struct rather than just 'socket index'
+        // TODO: validate socketFd??
+
+        // data has arrived from an already connected socket
+        auto bytesRead = read(socketFd, (void*)buffer, 1024); 
+
+        if (bytesRead > 0) {
+
+            buffer[bytesRead] = 0; 
+        }
+
+    return std::string(buffer);
+}
+
+//--------------------------------------------------------------------------------------------------------
+// Name: ProcessMessage
+// Desc:
+//--------------------------------------------------------------------------------------------------------
+bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pollfd pollFd) {
     
+    std::string message(buffer); 
+
+    if (message.find("GET / HTTP/1.1") != std::string::npos) {
+
+        auto response = BuildHttpResponseSSE(); 
+
+        auto result = send(pollFd.fd, response.c_str(), response.length(), 0);
+
+        if (result == -1) {
+            std::cout << "send() error\n"; 
+        } 
+
+    } else if (message.find("GET /event_src.php HTTP/1.1") != std::string::npos) {
+
+        auto response = BuildSSEResponse(); 
+
+        auto t = std::time(nullptr); 
+        auto localTime = *std::localtime(&t); 
+        char timeStr[100]; 
+        std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &localTime);
+
+        response += "\r\nretry: 15000\r\n";     
+        response += "data: ";
+        response += timeStr; 
+        response += "\r\n\r\n";  
+
+        if (send(pollFd.fd, response.c_str(), response.length(), 0) == -1) {
+            std::cout << "send() error\n"; 
+        }
+    }
+
     return true; 
 }
 
