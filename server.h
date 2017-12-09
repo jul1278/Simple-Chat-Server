@@ -1,6 +1,8 @@
 #ifndef SERVER_H
 #define SERVER_H
 
+#include "ServerResources.h"
+
 #include <string>
 #include <iostream>
 
@@ -19,21 +21,14 @@
 
 const int MAX_CLIENTS = 30; 
 
-enum HttpResponseType {
-    GET,
-    POST
-};
-
-struct HttpResponse {
-    HttpResponseType responseType;   
-}; 
-
 // TCPServer
 class TCPServer {
     
+    ServerResources serverResources; 
+
     bool status = false; 
     int sockfd;
-    int newsockfd; 
+     
     int portno;
 
     socklen_t clilen;
@@ -43,7 +38,6 @@ class TCPServer {
     std::unordered_set<int> streamClientFds; 
 
     sockaddr_in serv_addr;
-    sockaddr_in cli_addr;
 
     int fdCount;
 

@@ -1,6 +1,6 @@
 #include <iostream>
 
-#include "server.h"
+#include "Server.h"
 
 #include <string>
 #include <list>

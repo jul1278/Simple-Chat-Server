@@ -1,8 +1,11 @@
-#include "server.h"
+#include "Server.h"
+#include "ServerResources.h"
 
 #include <string>
 #include <iostream>
 #include <ctime>
+#include <unordered_map>
+
 #include <iomanip>
 
 #include <stdio.h>
@@ -17,57 +20,13 @@
 #include <errno.h>
 #include <list>
 
-const char* pageHtml = 
-"<html><body><H1>hi............</H1>"
-"<form action=\"/chat.php\"  method=\"post\">"
-"Message: <input type=\"text\" name=\"message\"><input type=\"submit\" value=\"Send\">"
-"</form></body></html>";
-
-//----------------------------------------------------------------------
-// ClientConnectionInfo
-//----------------------------------------------------------------------
-struct ClientConnectionInfo {
-    std::string userName; 
-    struct sockaddr_in addr; 
-    int addrLen; 
-    int socketFd; 
-}; 
-
-//--------------------------------------------------------------
-// Name: BuildHttpResponse
-// Desc:
-//--------------------------------------------------------------
-std::string BuildHttpResponse(std::string message) {
-    std::string response; 
-
-    auto len = std::to_string(message.length()); 
-
-    response += "HTTP/1.1 200 OK\r\n"; 
-    response += "Content-Length: ";
-    response += len;
-    response += "\r\n"; 
-    response += "Content-Type: text/html\n\n";
-
-    response += message; 
-
-    return response; 
-}
-
 //------------------------------------------------------------------------------------
 // Name: BuildHttpResponseSSE
 // Desc:
 //------------------------------------------------------------------------------------
-std::string BuildHttpResponseSSE() {
+std::string BuildHttpResponseSSE(const ServerResources& serverResources) {
 
-    std::string message = "<!DOCTYPE html><html><body><h1>Getting server updates</h1>"
-        "<div id=\"result\"></div><script>\r\n"
-        "if(typeof(EventSource) !== \"undefined\") {\r\n"
-            "var source = new EventSource(\"event_src.php\");\r\n"
-            "source.onmessage = function(event) {\r\n"
-            "document.getElementById(\"result\").innerHTML += event.data + \"<br>\";\r\n};\r\n"
-        "} else {\r\n"
-            "document.getElementById(\"result\").innerHTML = \"Sorry, your browser does not support server-sent events...\";\r\n"
-        "} </script></body></html>";
+    const auto message = serverResources.GetNamedResource("chat.html"); 
 
     std::string response; 
 
@@ -88,7 +47,7 @@ std::string BuildHttpResponseSSE() {
 // Name: BuildSSEResponse
 // Desc:
 //------------------------------------------------------------------------------------
-std::string BuildSSEResponse() {
+std::string GetSSEResponse() {
 
     std::string response; 
 
@@ -107,7 +66,6 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
 
     // create a new socket
     // SOCK_STREAM indicates that we want a TCP socket
-    // SOCK_DGRAM? is for UDP
     this->sockfd = socket(AF_INET, SOCK_STREAM, 0);
     
     if (this->sockfd < 0) {
@@ -166,6 +124,9 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         }
     }
 
+    // load up our html resources
+    this->serverResources.LoadResource("chat.html"); 
+
     // tell the socket that we want to listen for incomming connections
     if(listen(this->sockfd, 32) == -1) {
         this->status = false; 
@@ -180,7 +141,6 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
     this->readFds[0].fd = this->sockfd; 
     this->readFds[0].events = POLL_IN; 
 
-    this->clilen = sizeof(this->cli_addr);
     this->status = true; 
 }
 
@@ -206,7 +166,7 @@ bool TCPServer::GetMessage(std::string& message) {
     if (delta >= 1.0) {
         for (auto fd : this->streamClientFds) {
 
-            auto response = BuildSSEResponse(); 
+            auto response = GetSSEResponse(); 
 
             char timeStr[100]; 
             std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &currentTime);
@@ -325,7 +285,7 @@ bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pol
 
     if (message.find("GET / HTTP/1.1") != std::string::npos) {
 
-        auto response = BuildHttpResponseSSE(); 
+        auto response = BuildHttpResponseSSE(this->serverResources); 
 
         auto result = send(pollFd.fd, response.c_str(), response.length(), 0);
 
