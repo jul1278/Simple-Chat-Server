@@ -5,9 +5,8 @@
 #include <iostream>
 #include <ctime>
 #include <unordered_map>
-
 #include <iomanip>
-
+#include <signal.h>
 #include <stdio.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -176,8 +175,19 @@ bool TCPServer::GetMessage(std::string& message) {
             response += timeStr; 
             response += "\r\n\r\n";  
 
+            errno = 0; 
             if (send(fd, response.c_str(), response.length(), 0) == -1) {
-                std::cout << "send() error\n"; 
+                auto errnoCopy = errno; 
+                if (errno != EWOULDBLOCK) {
+                    std::cout << "send() errno: " << errnoCopy << "\n"; 
+                    std::cout << "Closing connection: " << fd << "\n"; 
+
+                    this->CloseClientConnection(fd); 
+
+                    if (this->streamClientFds.empty()) {
+                        break; 
+                    }
+                }
             }
         }
 
@@ -193,14 +203,18 @@ bool TCPServer::GetMessage(std::string& message) {
 
     for (auto i = 0; i < this->fdCount; i++) {
 
-        if (this->readFds[i].revents == 0 || this->readFds[i].revents != POLL_IN) {
+        if (this->readFds[i].revents == POLL_ERR) {
+            this->CloseClientConnection(this->readFds[i].fd); 
+            continue; 
+        }
+        
+        if (this->readFds[i].revents == 0) {
             // nothing happen
             continue; 
         }
 
         // incomming connections on listening socket
         if (this->readFds[i].fd == this->sockfd) {
-            
             int newConnectionSocketFd = 0;
 
             // listening socket is readable
@@ -250,14 +264,16 @@ bool TCPServer::GetMessage(std::string& message) {
                     if (errno != EWOULDBLOCK) {
                         std::cout << "recv() error\n"; 
 
-                        // TODO: close this connection
+                        // Close this connection
+                        this->CloseClientConnection(this->readFds[i].fd); 
                     }
 
                     break; 
 
                 } else if (result == 0) {
 
-                    // TODO: close this connection
+                    // Close this connection
+                    this->CloseClientConnection(this->readFds[i].fd); 
                     break;
 
                 } else {
@@ -265,21 +281,20 @@ bool TCPServer::GetMessage(std::string& message) {
                     buffer[result] = 0; 
                     std::cout << buffer << "\n";
 
-                    this->ProcessMessage(buffer, result, this->readFds[i]); 
+                    this->ProcessRequest(buffer, result, this->readFds[i]); 
                 }
             }
         }
-
     }
 
     return true; 
 }
 
 //--------------------------------------------------------------------------------------------------------
-// Name: ProcessMessage
+// Name: ProcessRequest
 // Desc:
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pollfd pollFd) {
+bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, struct pollfd pollFd) {
     
     std::string message(buffer); 
 
@@ -291,6 +306,7 @@ bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pol
 
         if (result == -1) {
             std::cout << "send() error\n"; 
+            this->CloseClientConnection(pollFd.fd);
         } 
 
     } else if (message.find("GET /event_src.php HTTP/1.1") != std::string::npos) {
@@ -301,6 +317,42 @@ bool TCPServer::ProcessMessage(const char* buffer, unsigned int size, struct pol
     }
 
     return true; 
+}
+
+//--------------------------------------------------------------------------------------------------------
+// Name: CloseClientConnection
+// Desc:
+//--------------------------------------------------------------------------------------------------------
+void TCPServer::CloseClientConnection(int fd) {
+
+    auto newFdCount = this->fdCount; 
+
+    // close and compress the list
+    for(auto i = 0; i < this->fdCount - 1; i++) {
+
+        if (i < 0) {
+            continue; 
+        }
+
+        if (this->readFds[i].fd == fd) {
+            // remove from streamClient hashset
+            this->streamClientFds.erase(this->readFds[i].fd); 
+            close(this->readFds[i].fd); 
+            this->readFds[i].fd = -1; 
+            newFdCount--; 
+        }
+
+        if (this->readFds[i].fd == -1) {
+            this->readFds[i] = this->readFds[i+1]; 
+            this->readFds[i + 1].fd = -1; 
+
+            // we need to move i back so we check the new fd                
+            i--; 
+        }
+    }  
+
+    this->fdCount = newFdCount;
+    //this->readFds[this->fdCount].fd = 0; 
 }
 
 //--------------------------------------------------------------------------------------------------------

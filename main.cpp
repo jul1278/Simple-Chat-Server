@@ -11,6 +11,9 @@
 //-------------------------------------------------------------------------------------------
 int main(int argc, char** argv) {
 
+    // dont want to get signal crash we can handle errors     
+    signal(SIGPIPE, SIG_IGN);
+
     TCPServer server("Server", 5004); 
     
     if (server.Connected()) {

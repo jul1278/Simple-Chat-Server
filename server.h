@@ -41,7 +41,9 @@ class TCPServer {
 
     int fdCount;
 
-    bool ProcessMessage(const char* buffer, unsigned int size, struct pollfd pollFd);
+    void CloseClientConnection(int index); 
+
+    bool ProcessRequest(const char* buffer, unsigned int size, struct pollfd pollFd);
 
 public:
     
