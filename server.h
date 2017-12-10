@@ -19,9 +19,43 @@
 #include <errno.h>
 #include <list>
 
-const int MAX_CLIENTS = 30; 
+const int MAX_CLIENTS = 100; 
 
-// TCPServer
+//------------------------------------------------------------------------------------------------------
+// Name: PollFdInfo
+//------------------------------------------------------------------------------------------------------
+struct PollFdInfo {
+    struct pollfd pollFds[MAX_CLIENTS]; 
+    int usedNumFds; 
+};
+
+//------------------------------------------------------------------------------------------------------
+// Name: ServerStreamInfo
+//------------------------------------------------------------------------------------------------------
+struct ServerStreamInfo {
+    time_t lastStreamTime; 
+    std::unordered_set<int> streamClientFds; 
+
+    //-------------------------------------------------------------------
+    // Name: InsertFd
+    //-------------------------------------------------------------------    
+    ServerStreamInfo() {
+        this->lastStreamTime = std::time(nullptr); 
+    }
+
+    //-------------------------------------------------------------------
+    // Name: InsertFd
+    //-------------------------------------------------------------------
+    void InsertFd(int fd) {
+        if (this->streamClientFds.find(fd) == this->streamClientFds.end()) {
+            this->streamClientFds.insert(fd); 
+        }
+    }
+};
+
+//------------------------------------------------------------------------------------------------------
+// Name: TCPServer
+//------------------------------------------------------------------------------------------------------
 class TCPServer {
     
     ServerResources serverResources; 
@@ -32,18 +66,17 @@ class TCPServer {
     int portno;
 
     socklen_t clilen;
-    time_t lastStreamTime;  
-
-    struct pollfd readFds[MAX_CLIENTS]; 
-    std::unordered_set<int> streamClientFds; 
+ 
+    struct PollFdInfo pollFdInfo; 
+    struct ServerStreamInfo serverStreamInfo; 
 
     sockaddr_in serv_addr;
-
-    int fdCount;
-
-    void CloseClientConnection(int index); 
-
-    bool ProcessRequest(const char* buffer, unsigned int size, struct pollfd pollFd);
+    void CloseClientConnection(const int index); 
+    
+    void StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo);
+    struct PollFdInfo AcceptIncomingConnections(const int listeningSocketId,  const struct PollFdInfo& pollFdInfo); 
+    bool ProcessRequest(const char* buffer, unsigned int size, const int pollFd);
+    bool ReadSocket(int fd); 
 
 public:
     

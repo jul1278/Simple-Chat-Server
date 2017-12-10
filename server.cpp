@@ -143,11 +143,9 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         return; 
     }
 
-    this->lastStreamTime = std::time(nullptr); 
-
-    this->fdCount = 1; 
-    this->readFds[0].fd = this->sockfd; 
-    this->readFds[0].events = POLL_IN; 
+    this->pollFdInfo.usedNumFds = 1; 
+    this->pollFdInfo.pollFds[0].fd = this->sockfd; 
+    this->pollFdInfo.pollFds[0].events = POLL_IN; 
 
     this->status = true; 
 }
@@ -161,18 +159,18 @@ TCPServer::~TCPServer() {
 }
 
 //--------------------------------------------------------------------------------------------------------
-// Name: GetMessage
-// Desc: 
+// Name: StreamUpdatesToClients
+// Desc:
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::GetMessage(std::string& message) {
+void TCPServer::StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo) {
 
     // stream updates to clients first
     auto t = std::time(nullptr); 
     auto currentTime = *std::localtime(&t); 
-    auto delta = difftime(t, this->lastStreamTime); 
+    auto delta = difftime(t, serverStreamInfo.lastStreamTime); 
 
     if (delta >= 1.0) {
-        for (auto fd : this->streamClientFds) {
+        for (auto fd : serverStreamInfo.streamClientFds) {
 
             auto response = GetSSEResponse(); 
 
@@ -193,109 +191,54 @@ bool TCPServer::GetMessage(std::string& message) {
 
                     this->CloseClientConnection(fd); 
 
-                    if (this->streamClientFds.empty()) {
+                    if (serverStreamInfo.streamClientFds.empty()) {
                         break; 
                     }
                 }
             }
         }
 
-        this->lastStreamTime = t; 
+        serverStreamInfo.lastStreamTime = t; 
     }
+}
 
-    auto activity = poll(this->readFds, MAX_CLIENTS, 0); 
+//--------------------------------------------------------------------------------------------------------
+// Name: GetMessage
+// Desc: 
+//--------------------------------------------------------------------------------------------------------
+bool TCPServer::GetMessage(std::string& message) {
+
+    this->StreamUpdatesToClients(this->serverStreamInfo); 
+
+    auto activity = poll(this->pollFdInfo.pollFds, MAX_CLIENTS, 0); 
 
     if (activity <= 0) {
         // error or timeout
         return false; 
     }
 
-    for (auto i = 0; i < this->fdCount; i++) {
+    for (auto i = 0; i < this->pollFdInfo.usedNumFds; i++) {
 
-        if (this->readFds[i].revents == POLL_ERR) {
-            this->CloseClientConnection(this->readFds[i].fd); 
+        if (this->pollFdInfo.pollFds[i].revents == POLL_ERR) {
+            this->CloseClientConnection(this->pollFdInfo.pollFds[i].fd); 
             continue; 
         }
         
-        if (this->readFds[i].revents == 0) {
+        if (this->pollFdInfo.pollFds[i].revents == 0) {
             // nothing happen
             continue; 
         }
 
         // incomming connections on listening socket
-        if (this->readFds[i].fd == this->sockfd) {
-            int newConnectionSocketFd = 0;
+        if (this->pollFdInfo.pollFds[i].fd == this->sockfd) {
+            this->pollFdInfo = this->AcceptIncomingConnections(i, this->pollFdInfo);
 
-            // listening socket is readable
-            while(newConnectionSocketFd != -1) {
-                struct sockaddr_in clientAddress; 
-                socklen_t clientAddressLen = sizeof(clientAddress); 
-
-                // accept new incoming connection
-                newConnectionSocketFd = accept(this->sockfd, (struct sockaddr*) &clientAddress, &clientAddressLen); 
-
-                if (newConnectionSocketFd < 0) {
-                    if (errno != EWOULDBLOCK) { /* error! */ }
-                    break;
-
-                } else {
-                    if (this->fdCount < MAX_CLIENTS) {
-                            
-                        this->readFds[this->fdCount].fd = newConnectionSocketFd; 
-                        this->readFds[this->fdCount].events = POLL_IN; 
-
-                        this->fdCount++;
-
-                        struct sockaddr_in addr; 
-                        socklen_t len = sizeof(addr); 
-
-                        auto result = getpeername(newConnectionSocketFd, (struct sockaddr*) &addr, &len); 
-                        std::cout << "Incoming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
-
-                    } else {
-                        auto unavailableResponse = BuildHttpServiceUnavailable(); 
-                        
-                        if(send(newConnectionSocketFd, unavailableResponse.c_str(), unavailableResponse.length(), 0) == -1) {
-                            std::cout << "send() error\n"; 
-                        }
-
-                        std::cout << "Can't accept any more connections\n";
-                        break; 
-                    }
-                }
-            } 
         } else {
+
             // descriptor is readable 
-
             while(true) {
-
-                char buffer[1024]; 
-
-                // TODO: what is the last argument
-                auto result = recv(this->readFds[i].fd, (void*)buffer, sizeof(buffer), 0); 
-
-                if (result < 0) {
-                    if (errno != EWOULDBLOCK) {
-                        std::cout << "recv() error\n"; 
-
-                        // Close this connection
-                        this->CloseClientConnection(this->readFds[i].fd); 
-                    }
-
+                if (!this->ReadSocket(this->pollFdInfo.pollFds[i].fd) ) {
                     break; 
-
-                } else if (result == 0) {
-
-                    // Close this connection
-                    this->CloseClientConnection(this->readFds[i].fd); 
-                    break;
-
-                } else {
-
-                    buffer[result] = 0; 
-                    std::cout << buffer << "\n";
-
-                    this->ProcessRequest(buffer, result, this->readFds[i]); 
                 }
             }
         }
@@ -308,7 +251,97 @@ bool TCPServer::GetMessage(std::string& message) {
 // Name: ProcessRequest
 // Desc:
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, struct pollfd pollFd) {
+bool TCPServer::ReadSocket(int fd) {
+    char buffer[1024]; 
+
+    // TODO: what is the last argument
+    auto result = recv(fd, (void*)buffer, sizeof(buffer), 0); 
+
+    if (result < 0) {
+        if (errno != EWOULDBLOCK) {
+            std::cout << "recv() error\n"; 
+
+            // Close this connection
+            this->CloseClientConnection(fd); 
+        }
+
+        return false;  
+
+    } else if (result == 0) {
+
+        // Close this connection
+        this->CloseClientConnection(fd); 
+        return false;
+
+    } else {
+
+        buffer[result] = 0; 
+        std::cout << buffer << "\n";
+
+        this->ProcessRequest(buffer, result, fd); 
+    }
+
+    return true; 
+}
+
+//--------------------------------------------------------------------------------------------------------
+// Name: ProcessRequest
+// Desc:
+//--------------------------------------------------------------------------------------------------------
+struct PollFdInfo TCPServer::AcceptIncomingConnections(const int listeningSocketId,  const struct PollFdInfo& pollFdInfo) {
+    
+    struct PollFdInfo newPollFdInfo = pollFdInfo; 
+
+    int newConnectionSocketFd = 0;
+    auto listeningSocketFd = pollFdInfo.pollFds[listeningSocketId].fd; 
+
+    // listening socket is readable
+    while(newConnectionSocketFd != -1) {
+        struct sockaddr_in clientAddress; 
+        socklen_t clientAddressLen = sizeof(clientAddress); 
+
+        // accept new incoming connection
+        newConnectionSocketFd = accept(listeningSocketFd, (struct sockaddr*) &clientAddress, &clientAddressLen); 
+
+        if (newConnectionSocketFd < 0) {
+            if (errno != EWOULDBLOCK) { /* error! */ }
+            break;
+
+        } else {
+            if (newPollFdInfo.usedNumFds < MAX_CLIENTS) {
+                    
+                newPollFdInfo.pollFds[newPollFdInfo.usedNumFds].fd = newConnectionSocketFd; 
+                newPollFdInfo.pollFds[newPollFdInfo.usedNumFds].events = POLL_IN; 
+
+                newPollFdInfo.usedNumFds++; 
+
+                struct sockaddr_in addr; 
+                socklen_t len = sizeof(addr); 
+
+                auto result = getpeername(newConnectionSocketFd, (struct sockaddr*) &addr, &len); 
+                std::cout << "Incoming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
+
+            } else {
+                auto unavailableResponse = BuildHttpServiceUnavailable(); 
+                
+                if(send(newConnectionSocketFd, unavailableResponse.c_str(), unavailableResponse.length(), 0) == -1) {
+                    std::cout << "send() error\n"; 
+                }
+
+                std::cout << "Can't accept any more connections\n";
+                break; 
+            }
+        }
+    } 
+
+    return newPollFdInfo; 
+}
+
+//--------------------------------------------------------------------------------------------------------
+// Name: ProcessRequest
+// Desc:
+//--------------------------------------------------------------------------------------------------------
+bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, int fd) {
     
     std::string message(buffer); 
 
@@ -316,18 +349,17 @@ bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, struct pol
 
         auto response = BuildHttpResponseSSE(this->serverResources); 
 
-        auto result = send(pollFd.fd, response.c_str(), response.length(), 0);
+        auto result = send(fd, response.c_str(), response.length(), 0);
 
         if (result == -1) {
             std::cout << "send() error\n"; 
-            this->CloseClientConnection(pollFd.fd);
+            this->CloseClientConnection(fd);
         } 
 
     } else if (message.find("GET /event_src.php HTTP/1.1") != std::string::npos) {
 
-        if (this->streamClientFds.find(pollFd.fd) == this->streamClientFds.end()) {
-            this->streamClientFds.insert(pollFd.fd); 
-        }
+        this->serverStreamInfo.InsertFd(fd); 
+
     }
 
     return true; 
@@ -341,28 +373,30 @@ void TCPServer::CloseClientConnection(int fd) {
 
     std::cout << "Closing connection fd: " << fd << "\n"; 
 
-    auto newFdCount = this->fdCount; 
+    auto newFdCount = this->pollFdInfo.usedNumFds; 
 
     // close and compress the list
-    for(auto i = 0; i < this->fdCount; i++) {
+    for(auto i = 0; i < this->pollFdInfo.usedNumFds; i++) {
 
         if (i < 0) {
             continue; 
         }
 
-        if (this->readFds[i].fd == fd) {
+        if (this->pollFdInfo.pollFds[i].fd == fd) {
             // remove from streamClient hashset
-            this->streamClientFds.erase(this->readFds[i].fd); 
-            close(this->readFds[i].fd); 
-            this->readFds[i].fd = -1; 
+            this->serverStreamInfo.streamClientFds.erase(this->pollFdInfo.pollFds[i].fd); 
+            
+            close(this->pollFdInfo.pollFds[i].fd); 
+            this->pollFdInfo.pollFds[i].fd = -1; 
+            
             newFdCount--; 
         }
 
-        if (this->readFds[i].fd == -1) {
-            this->readFds[i] = this->readFds[i+1]; 
+        if (this->pollFdInfo.pollFds[i].fd == -1) {
+            this->pollFdInfo.pollFds[i] = this->pollFdInfo.pollFds[i+1]; 
 
-            if ((i + 1) < this->fdCount) {
-                this->readFds[i + 1].fd = -1; 
+            if ((i + 1) < this->pollFdInfo.usedNumFds) {
+                this->pollFdInfo.pollFds[i + 1].fd = -1; 
             }
             
             // we need to move i back so we check the new fd                
@@ -370,7 +404,7 @@ void TCPServer::CloseClientConnection(int fd) {
         }
     }  
 
-    this->fdCount = newFdCount;
+    this->pollFdInfo.usedNumFds = newFdCount;
 }
 
 //--------------------------------------------------------------------------------------------------------

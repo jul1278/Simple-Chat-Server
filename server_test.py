@@ -3,7 +3,7 @@
 import httplib
 
 
-connections = [httplib.HTTPConnection("localhost:5004") for x in range(0, 50)]
+connections = [httplib.HTTPConnection("localhost:5004") for x in range(0, 102)]
 
 for c in connections:
     c.request("GET","/")
