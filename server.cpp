@@ -43,6 +43,15 @@ std::string BuildHttpResponseSSE(const ServerResources& serverResources) {
 }
 
 //------------------------------------------------------------------------------------
+// Name: BuildHttpResponseUnauthorised
+// Desc:
+//------------------------------------------------------------------------------------
+std::string BuildHttpServiceUnavailable() {
+    auto response = "HTTP/1.1 503 Service Unavailable\r\n\r\n";
+    return response;
+}
+
+//------------------------------------------------------------------------------------
 // Name: BuildSSEResponse
 // Desc:
 //------------------------------------------------------------------------------------
@@ -244,6 +253,11 @@ bool TCPServer::GetMessage(std::string& message) {
                         std::cout << "Incoming connection... " << inet_ntoa(addr.sin_addr) << "\n";  
 
                     } else {
+                        auto unavailableResponse = BuildHttpServiceUnavailable(); 
+                        
+                        if(send(newConnectionSocketFd, unavailableResponse.c_str(), unavailableResponse.length(), 0) == -1) {
+                            std::cout << "send() error\n"; 
+                        }
 
                         std::cout << "Can't accept any more connections\n";
                         break; 
@@ -325,10 +339,12 @@ bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, struct pol
 //--------------------------------------------------------------------------------------------------------
 void TCPServer::CloseClientConnection(int fd) {
 
+    std::cout << "Closing connection fd: " << fd << "\n"; 
+
     auto newFdCount = this->fdCount; 
 
     // close and compress the list
-    for(auto i = 0; i < this->fdCount - 1; i++) {
+    for(auto i = 0; i < this->fdCount; i++) {
 
         if (i < 0) {
             continue; 
@@ -344,15 +360,17 @@ void TCPServer::CloseClientConnection(int fd) {
 
         if (this->readFds[i].fd == -1) {
             this->readFds[i] = this->readFds[i+1]; 
-            this->readFds[i + 1].fd = -1; 
 
+            if ((i + 1) < this->fdCount) {
+                this->readFds[i + 1].fd = -1; 
+            }
+            
             // we need to move i back so we check the new fd                
             i--; 
         }
     }  
 
     this->fdCount = newFdCount;
-    //this->readFds[this->fdCount].fd = 0; 
 }
 
 //--------------------------------------------------------------------------------------------------------
