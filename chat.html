@@ -1,15 +1,61 @@
 <!- chat.html ->
 <!DOCTYPE html>
 <html>
+<head>
+        <link rel="shortcut icon" href="about:blank">
+<style>
+div.messages {
+    background-color: #dddddd; 
+    box-shadow: #888888;  
+    min-height: 120px;
+    line-height: 100%;
+    width: 50%;
+    height: 50%;
+    resize: vertical;
+    overflow: scroll;
+}
+
+input[type=text], select {
+    width: 40%;
+    padding: 12px 20px;
+    margin: 8px 0;
+    display: inline-block;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+input[type=submit] {
+    background-color: rgb(65, 65, 65);
+    border: none;
+    color: white;
+    padding: 16px 32px;
+    text-decoration: none;
+    margin: 4px 2px;
+    width: 10%;
+    cursor: pointer;
+}
+
+</style>
+    </head>
     <body>
-        <h1>Getting server updates</h1>
-        <div id="result"></div>
+        <H1 style="font-family:Helvetica">Hi</H1>
+        <div class="messages" id="result"/></div>
+        <form method="post">
+            <input type="text" name="message" value="">
+            <input type="submit" value="Send">
+        </form> 
+
         <script>
             if(typeof(EventSource) !== "undefined") {
                 var source = new EventSource("event_src.php");
                 source.onmessage = function(event) {
-                    document.getElementById("result").innerHTML += event.data + "</br>";
+                    document.getElementById("result").innerHTML += event.data;
                 };
+                source.onerror = function() {
+                    console.log("EventSource failed.");
+                };
+
             } else {
                 document.getElementById("result").innerHTML = "Sorry, your browser does not support server-sent events...";
             } 

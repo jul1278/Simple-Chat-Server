@@ -70,14 +70,16 @@ class TCPServer {
     struct PollFdInfo pollFdInfo; 
     struct ServerStreamInfo serverStreamInfo; 
 
+    std::list<std::string> messages; 
+
     sockaddr_in serv_addr;
     void CloseClientConnection(const int index); 
     
     void StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo);
     struct PollFdInfo AcceptIncomingConnections(const int listeningSocketId,  const struct PollFdInfo& pollFdInfo); 
-    bool ProcessRequest(const char* buffer, unsigned int size, const int pollFd);
+    bool RouteRequest(const char* buffer, unsigned int size, const int pollFd);
     bool ReadSocket(int fd); 
-
+    
 public:
     
     //------------------------------------------------------------------------------------
@@ -92,7 +94,13 @@ public:
     // Name: GetMessage
     // Desc: 
     //--------------------------------------------------------------------------------------------------------
-    bool GetMessage(std::string& message);
+    bool Update(std::string& message);
+
+    //--------------------------------------------------------------------------------------------------------
+    // Name: GetPublicIP
+    // Desc:
+    //--------------------------------------------------------------------------------------------------------
+    void GetPublicIP();
 
     //--------------------------------------------------------------------------------------------------------
     // Name: Connected

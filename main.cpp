@@ -22,7 +22,7 @@ int main(int argc, char** argv) {
         
         while(server.Connected()) {
             std::string message; 
-            server.GetMessage(message); 
+            server.Update(message); 
         }
     }
    

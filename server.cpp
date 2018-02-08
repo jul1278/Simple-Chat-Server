@@ -9,12 +9,15 @@
 #include <signal.h>
 #include <stdio.h>
 #include <sys/types.h>
+#include <ifaddrs.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/ioctl.h>
 #include <sys/poll.h>
 #include <arpa/inet.h> 
 #include <unistd.h>
 #include <sys/time.h> 
+#include <netdb.h>
 #include <fcntl.h>
 #include <errno.h>
 #include <list>
@@ -32,6 +35,7 @@ std::string BuildHttpResponseSSE(const ServerResources& serverResources) {
     auto len = std::to_string(message.length()); 
 
     response += "HTTP/1.1 200 OK\r\n"; 
+    response += "Connection: keep-alive\r\n";
     response += "Content-Length: ";
     response += len;
     response += "\r\n"; 
@@ -55,13 +59,22 @@ std::string BuildHttpServiceUnavailable() {
 // Name: BuildSSEResponse
 // Desc:
 //------------------------------------------------------------------------------------
-std::string GetSSEResponse() {
+std::string GetSSEResponse(std::string data) {
 
     std::string response; 
 
+    auto len = std::to_string(data.length()); 
+
     response += "HTTP/1.1 200 OK\r\n"; 
-    response += "Connection: keep-alive\r\n";
+    response += "Cache-Control: no-cache\r\n";
     response += "Content-Type: text/event-stream\r\n";
+    //response += "Content-Length: ";
+    //response += len;
+    //response += "\r\n";
+    //response += "retry: 150000\r\n";     
+    //response += data; 
+    response += "\r\n\r\n";
+    //response += "Transfer-Encoding: chunked\r\n";
 
     return response; 
 }
@@ -82,6 +95,7 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         return; 
     }
 
+    struct ifaddr* ifAddress; 
     int on = 1; 
 
     // Allow socket descriptor to be reuseable
@@ -89,6 +103,12 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
     {
         std::cout << "setsockopt() failed\n";
         close(this->sockfd);
+        return; 
+    }
+
+    if (setsockopt(this->sockfd, SOL_SOCKET, SO_KEEPALIVE, (void*)&on, sizeof(on)) == -1) {
+        std::cout << "SO_KEEPALIVE setsockopt() failed\n";
+        close(this->sockfd); 
         return; 
     }
 
@@ -100,6 +120,12 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
         close(this->sockfd);
         return;
     }
+
+    // getifaddrs(&ifAddress); 
+
+    // if (ifAddress->ifa_addr) {
+    //     //<div class="_H1m _u2m _kup _I5m" style="-webkit-line-clamp:2">220.235.154.55</div>
+    // }
 
     memset((char *) &this->serv_addr, 0, sizeof(this->serv_addr));
     
@@ -148,14 +174,27 @@ TCPServer::TCPServer(const std::string& name, const unsigned int port) {
     this->pollFdInfo.pollFds[0].events = POLL_IN; 
 
     this->status = true; 
+
+    this->GetPublicIP();
 }
 
 //--------------------------------------------------------------------------------------------------------
-// Name: TCPServer
+// Name: ~TCPServer
 // Desc:
 //--------------------------------------------------------------------------------------------------------
 TCPServer::~TCPServer() {
-    close(this->sockfd); 
+    for(auto pollFd : this->pollFdInfo.pollFds) {
+        close(pollFd.fd); 
+    } 
+}
+
+//--------------------------------------------------------------------------------------------------------
+// Name: GetPublicIP
+// Desc:
+//--------------------------------------------------------------------------------------------------------
+void TCPServer::GetPublicIP() {
+    // bad!
+    system("curl 'https://api.ipify.org' -w \"\n\""); 
 }
 
 //--------------------------------------------------------------------------------------------------------
@@ -169,18 +208,22 @@ void TCPServer::StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo
     auto currentTime = *std::localtime(&t); 
     auto delta = difftime(t, serverStreamInfo.lastStreamTime); 
 
-    if (delta >= 1.0) {
+    if (!this->messages.empty()) {
         for (auto fd : serverStreamInfo.streamClientFds) {
 
-            auto response = GetSSEResponse(); 
+            // should we only send this the first time?
+            std::string data; 
+            data += "data: "; 
 
-            char timeStr[100]; 
-            std::strftime(timeStr, sizeof(timeStr), "%d-%m-%Y %H:%M:%S", &currentTime);
+            for (auto s : this->messages) {
+                data += s;
+                data += "</br>";
+            }
 
-            response += "\r\nretry: 15000\r\n";     
-            response += "data: ";
-            response += timeStr; 
-            response += "\r\n\r\n";  
+            data += "\r\n\r\n";
+
+            auto response = data;//GetSSEResponse(data); 
+            std::cout << response << "\n"; 
 
             errno = 0; 
             if (send(fd, response.c_str(), response.length(), 0) == -1) {
@@ -198,7 +241,7 @@ void TCPServer::StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo
             }
         }
 
-        serverStreamInfo.lastStreamTime = t; 
+        this->messages.clear();
     }
 }
 
@@ -206,7 +249,7 @@ void TCPServer::StreamUpdatesToClients(struct ServerStreamInfo& serverStreamInfo
 // Name: GetMessage
 // Desc: 
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::GetMessage(std::string& message) {
+bool TCPServer::Update(std::string& message) {
 
     this->StreamUpdatesToClients(this->serverStreamInfo); 
 
@@ -219,16 +262,16 @@ bool TCPServer::GetMessage(std::string& message) {
 
     for (auto i = 0; i < this->pollFdInfo.usedNumFds; i++) {
 
-        if (this->pollFdInfo.pollFds[i].revents == POLL_ERR) {
-            this->CloseClientConnection(this->pollFdInfo.pollFds[i].fd); 
-            continue; 
-        }
-        
         if (this->pollFdInfo.pollFds[i].revents == 0) {
             // nothing happen
             continue; 
         }
 
+        if (this->pollFdInfo.pollFds[i].revents == POLL_ERR) {
+            this->CloseClientConnection(this->pollFdInfo.pollFds[i].fd); 
+            continue; 
+        }
+        
         // incomming connections on listening socket
         if (this->pollFdInfo.pollFds[i].fd == this->sockfd) {
             this->pollFdInfo = this->AcceptIncomingConnections(i, this->pollFdInfo);
@@ -236,11 +279,7 @@ bool TCPServer::GetMessage(std::string& message) {
         } else {
 
             // descriptor is readable 
-            while(true) {
-                if (!this->ReadSocket(this->pollFdInfo.pollFds[i].fd) ) {
-                    break; 
-                }
-            }
+            this->ReadSocket(this->pollFdInfo.pollFds[i].fd);
         }
     }
 
@@ -252,34 +291,35 @@ bool TCPServer::GetMessage(std::string& message) {
 // Desc:
 //--------------------------------------------------------------------------------------------------------
 bool TCPServer::ReadSocket(int fd) {
+    
     char buffer[1024]; 
+    memset(buffer, 0, sizeof(buffer)); 
 
-    // TODO: what is the last argument
-    auto result = recv(fd, (void*)buffer, sizeof(buffer), 0); 
+    ssize_t size = 0; 
 
-    if (result < 0) {
-        if (errno != EWOULDBLOCK) {
-            std::cout << "recv() error\n"; 
+    // read from the buffer until its empty
+    while(size < 1024) {
+        
+        // is this ok 
+        auto result = recv(fd, (void*)&buffer[size], sizeof(buffer) - size, 0); 
+
+        if (result == 0) {
+            break; 
+        } else if (result < 0) {
+            if (errno != EWOULDBLOCK) {
+                std::cout << "recv() error on fd: " << fd << " - " << strerror(errno) << "\n"; 
+                this->CloseClientConnection(fd);
+            }
 
             // Close this connection
-            this->CloseClientConnection(fd); 
-        }
+            break;  
+        } 
 
-        return false;  
-
-    } else if (result == 0) {
-
-        // Close this connection
-        this->CloseClientConnection(fd); 
-        return false;
-
-    } else {
-
-        buffer[result] = 0; 
-        std::cout << buffer << "\n";
-
-        this->ProcessRequest(buffer, result, fd); 
+        size += result;
     }
+
+    buffer[size] = 0; 
+    this->RouteRequest(buffer, size, fd);
 
     return true; 
 }
@@ -308,6 +348,7 @@ struct PollFdInfo TCPServer::AcceptIncomingConnections(const int listeningSocket
             break;
 
         } else {
+
             if (newPollFdInfo.usedNumFds < MAX_CLIENTS) {
                     
                 newPollFdInfo.pollFds[newPollFdInfo.usedNumFds].fd = newConnectionSocketFd; 
@@ -338,10 +379,10 @@ struct PollFdInfo TCPServer::AcceptIncomingConnections(const int listeningSocket
 }
 
 //--------------------------------------------------------------------------------------------------------
-// Name: ProcessRequest
+// Name: RouteRequest
 // Desc:
 //--------------------------------------------------------------------------------------------------------
-bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, int fd) {
+bool TCPServer::RouteRequest(const char* buffer, unsigned int size, int fd) {
     
     std::string message(buffer); 
 
@@ -356,10 +397,44 @@ bool TCPServer::ProcessRequest(const char* buffer, unsigned int size, int fd) {
             this->CloseClientConnection(fd);
         } 
 
+    } else if (message.find("POST / HTTP/1.1") != std::string::npos) {
+        
+        std::cout << message << "\n"; 
+
+        // TODO: this could probably be better
+        auto messageHeader = std::string("\r\nmessage="); 
+        auto result = message.find(messageHeader);  
+
+        if (result != std::string::npos) {
+
+            struct sockaddr_in addr; 
+            socklen_t len = sizeof(addr); 
+
+            auto peernameResult = getpeername(fd, (struct sockaddr*) &addr, &len); 
+
+            auto clientMessageEnd = message.find("\r\n", result + messageHeader.length()); 
+            
+            std::string clientMessage(inet_ntoa(addr.sin_addr));
+            clientMessage += ": ";
+            clientMessage += message.substr(result + messageHeader.length(), clientMessageEnd - result - messageHeader.length()); 
+
+            this->messages.push_back(clientMessage); 
+
+            // std::cout << clientMessage << "\n";
+        }
+    
     } else if (message.find("GET /event_src.php HTTP/1.1") != std::string::npos) {
+        
+        auto response = GetSSEResponse(""); 
+        auto result = send(fd, response.c_str(), response.length(), 0);
 
-        this->serverStreamInfo.InsertFd(fd); 
+        if (result == -1) {
+            std::cout << "send() error SSE\n"; 
+            this->CloseClientConnection(fd);
+        } 
 
+        this->serverStreamInfo.InsertFd(fd);
+        this->messages.push_back("Welcome!");         
     }
 
     return true; 
