@@ -45,13 +45,18 @@ input[type=submit] {
             <input type="text" name="message" value="">
             <input type="submit" value="Send">
         </form> 
-
+        
         <script>
             if(typeof(EventSource) !== "undefined") {
                 var source = new EventSource("event_src.php");
                 source.onmessage = function(event) {
                     document.getElementById("result").innerHTML += event.data;
                 };
+
+                source.addEventListener("message", function(message) {
+                    console.log(message.data)
+                });
+
                 source.onerror = function() {
                     console.log("EventSource failed.");
                 };
@@ -59,6 +64,7 @@ input[type=submit] {
             } else {
                 document.getElementById("result").innerHTML = "Sorry, your browser does not support server-sent events...";
             } 
+
         </script>
     </body>
 </html>
