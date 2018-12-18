@@ -1,53 +1,98 @@
-<!DOCTYPE HTML>
+<!DOCTYPE html>
 <html>
-   <head>
-      <script type="text/javascript">
-         function WebSocketTest()
-         {
-            if ("WebSocket" in window)
+    <head>
+    <link rel="shortcut icon" href="about:blank">
+    <style>
+        div.messages {
+            background-color: #dddddd; 
+            box-shadow: #888888;  
+            min-height: 120px;
+            line-height: 100%;
+            width: 50%;
+            height: 50%;
+            resize: vertical;
+            overflow: scroll;
+        }
+
+        input[type=text], select {
+            width: 40%;
+            padding: 12px 20px;
+            margin: 8px 0;
+            display: inline-block;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
+
+        input[type=submit] {
+            background-color: rgb(65, 65, 65);
+            border: none;
+            color: white;
+            padding: 16px 32px;
+            text-decoration: none;
+            margin: 4px 2px;
+            width: 10%;
+            cursor: pointer;
+        }
+
+    </style>
+    <script type="text/javascript">
+
+        // Let us open a web socket
+        var ws = new WebSocket("ws://112.213.165.52:5004/chat");
+
+        if ("WebSocket" in window)
+        {
+            ws.onopen = function()
             {
-               // Let us open a web socket
-               var ws = new WebSocket("ws://localhost:5004/chat");
-				
-               ws.onopen = function()
-               {
-                  // Web Socket is connected, send data using send()
-                  var str = "Hello..."; //"x".repeat(500); 
-                  ws.send(str);
-                  alert("Message is sent...");
-               };
-				
-               ws.onmessage = function (evt) 
-               { 
-                  var received_msg = evt.data;
-                  alert("Message is received...");
-               };
-				
-               ws.onclose = function()
-               { 
-                  // websocket is closed.
-                  alert("Connection is closed..."); 
-               };
-					
-               window.onbeforeunload = function(event) {
-                  socket.close();
-               };
-            }
-            
-            else
-            {
-               // The browser doesn't support WebSocket
-               alert("WebSocket NOT supported by your Browser!");
-            }
-         }
-      </script>
-		
-   </head>
-   <body>
-   
-      <div id="sse">
-         <a href="javascript:WebSocketTest()">Run WebSocket</a>
-      </div>
-      
-   </body>
+                // Web Socket is connected, send data using send()
+                var str = "Hello..."; //"x".repeat(500); 
+                ws.send(str);
+                console.log("Message is sent...");
+            };
+
+            ws.onmessage = function (evt) 
+            { 
+                var received_msg = evt.data;
+                document.getElementById("result").innerHTML += received_msg;
+                console.log(received_msg); 
+            };
+
+            ws.onclose = function()
+            { 
+                // websocket is closed.
+                console.log("Connection is closed..."); 
+            };
+
+            window.onbeforeunload = function(event) {
+                socket.close();
+            };
+        }
+        else
+        {
+            // The browser doesn't support WebSocket
+            console.log("WebSocket NOT supported by your Browser!");
+        }
+
+        function sendMessage(data) {
+            ws.send(data);
+        }
+        
+    </script>
+
+
+    </head>
+    <body>
+        <H1 style="font-family:Helvetica">Hi</H1>
+        <div class="messages" id="result"></div>
+        
+        <input id=test type="text" name="message" value=""/>
+        <input type="submit" value="Send" onclick="sendMessage(document.getElementById('test').value)"/>
+        
+
+        <!-- <div id="sse">
+            <a href="javascript:WebSocketTest()">Run WebSocket</a>
+        </div> -->
+
+    </body>
 </html>

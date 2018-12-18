@@ -147,6 +147,119 @@ public:
 };
 
 //------------------------------------------------------------------------------------
+// Name: EncodePayloadToSend
+// Desc:
+//------------------------------------------------------------------------------------
+void EncodePayload(const uint8_t* message, uint16_t messageLen, uint16_t* frameLen, uint8_t* buffer, uint16_t bufLen) {
+    
+    // TODO: check buffer is large enough for frame
+    
+    memset((void*) buffer, 0, bufLen); 
+    
+    buffer[0] = 1 << 7; // FIN for one frame
+
+    // rsv1, rsv2, rsv3 must be zero pretty much always
+    
+    buffer[0] |= 1; // opcode is 1 for text
+
+    //buffer[1] = (1 << 7); // fuck it mask on
+    
+    // payload length
+    if (messageLen < 126) {
+        buffer[1] |= messageLen; 
+    } else {
+        // TODO: 
+    }
+
+    for (auto i = 0; i < messageLen; i++) {
+        buffer[2 + i] = message[i]; 
+    }
+
+    *frameLen = 2 + messageLen; 
+}
+
+void EncodePayload(const std::string& message, uint16_t* frameLen, uint8_t* buffer, uint16_t bufLen) {
+    EncodePayload( (const uint8_t*) message.c_str(), message.size(), frameLen, buffer, bufLen); 
+}
+
+//--------------------------------------------------------------------------------------------------
+// Name: DecodeFrame
+// Desc:
+//--------------------------------------------------------------------------------------------------
+void DecodeFrame(uint8_t buffer[], uint16_t bufferLen, uint16_t payloadBufferLen, uint8_t* payloadBuffer, uint16_t* payloadLen) {
+    
+    if (bufferLen < 4) {
+        return; 
+    }
+    
+    uint8_t maskByteStart = 2; 
+
+    // lets decrypt the message we recieved
+    uint8_t fin = (buffer[0] >> 7) & 1;
+    uint8_t rsv1 = (buffer[0] >> 6) & 1; 
+    uint8_t rsv2 = (buffer[0] >> 5) & 1;  
+    uint8_t opcode = buffer[0] & 0xe;
+    uint8_t mask = (buffer[1] >> 7) & 1; 
+    uint8_t len = buffer[1] & 0x7f; 
+    
+    uint16_t extendedLen1 = 0; 
+    uint64_t extendedLen2 = 0; 
+
+    std::cout << "fin: " << (int) fin << "\n";
+    std::cout << "rsv1: " << (int) rsv1 << "\n";
+    std::cout << "rsv2: " << (int) rsv2 << "\n";
+    std::cout << "opcode: " << (int) opcode << "\n";  
+    std::cout << "mask: " << (int) mask << "\n"; 
+    std::cout << "len: " << (int) len << "\n"; 
+
+    if (len == 126) {
+        // we have to look at the extended payload len
+        // bytes 2 and 3
+
+        extendedLen1 = buffer[3];
+        extendedLen1 += buffer[2] << 8;
+        
+        // we use extendedLen instead of len if it is set 
+        // dont add them together or something
+        std::cout << "extended len 1: " << (int) extendedLen1 << "\n";
+
+        maskByteStart = 6;  
+    }         
+    else if (len == 127) {
+        // payload length is 32 bits + 16 bits
+        // TODO: 
+    }          
+
+    uint8_t maskKey[4];
+
+    maskKey[0] = buffer[maskByteStart];
+    maskKey[1] = buffer[maskByteStart + 1];
+    maskKey[2] = buffer[maskByteStart + 2];
+    maskKey[3] = buffer[maskByteStart + 3];  
+
+    std::cout << "mask key 0: " << (int) maskKey[0] << "\n";
+    std::cout << "mask key 1: " << (int) maskKey[1] << "\n";
+    std::cout << "mask key 2: " << (int) maskKey[2] << "\n";
+    std::cout << "mask key 3: " << (int) maskKey[3] << "\n";
+
+    // now actually decode the message
+    uint16_t payloadStart = maskByteStart + 4; 
+    *payloadLen =  extendedLen1 ? extendedLen1 : len; 
+
+    if (*payloadLen + 1 > payloadBufferLen) {
+        // 
+        std::cout << "DecodeFrame() Warning! payload larger than given buffer\n"; 
+        return;
+    }
+
+    memset((void*) payloadBuffer, 0, payloadBufferLen); 
+
+    for(uint16_t i = 0; i < *payloadLen && i < payloadBufferLen; i++) {
+        payloadBuffer[i] = buffer[payloadStart + i] ^ maskKey[i % 4]; 
+    }
+}
+
+//------------------------------------------------------------------------------------
 // Name: AcceptIncomingConnectionsOnSocket
 // Desc:
 //------------------------------------------------------------------------------------
@@ -378,6 +491,13 @@ void SortHttpResponse(struct HttpResponse& httpResponse, ServerResources& server
             // last thing
             free(base64EncodedBuffer); 
 
+            if (sendResult < 0) {
+                std::cout << "send() failed!\n"; 
+                std::cout << "WS Handshake failed!\n"; 
+
+                return; 
+            }
+
             wsSockets.insert(pollFd.fd); 
 
             return; 
@@ -451,68 +571,23 @@ void ProcessFds(PollFdInfo& pollFdInfo, int listeningFd, ServerResources& server
                     if (wsSockets.find(pollFdInfo.pollFds[i].fd) != wsSockets.end()) {
                         
                         //
-                        uint8_t maskByteStart = 2; 
+                        uint8_t payload[1024]; 
+                        uint16_t payloadLen; 
+                        DecodeFrame(buffer, bufferSize, 1024, payload, &payloadLen); 
 
-                        // lets decrypt the message we recieved
-                        uint8_t fin = (buffer[0] >> 1) & 1;
-                        uint8_t rsv1 = (buffer[0] >> 6) & 1; 
-                        uint8_t rsv2 = (buffer[0] >> 5) & 1;  
-                        uint8_t opcode = buffer[0] & 0xe;
-                        uint8_t mask = (buffer[1] >> 7) & 1; 
-                        uint8_t len = buffer[1] & 0x7f; 
-                        
-                        uint16_t extendedLen1 = 0; 
-                        uint64_t extendedLen2 = 0; 
+                        std::cout << "decoded: " << payload << "\n"; 
 
-                        std::cout << "fin: " << (int) fin << "\n";
-                        std::cout << "rsv1: " << (int) rsv1 << "\n";
-                        std::cout << "rsv2: " << (int) rsv2 << "\n";
-                        std::cout << "opcode: " << (int) opcode << "\n";  
-                        std::cout << "mask: " << (int) mask << "\n"; 
-                        std::cout << "len: " << (int) len << "\n"; 
+                        uint8_t response[512]; 
+                        uint16_t frameLen = 0;
 
-                        if (len == 126) {
-                            // we have to look at the extended payload len
-                            // bytes 2 and 3
- 
-                            extendedLen1 = buffer[3];
-                            extendedLen1 += buffer[2] << 8;
-                            
-                            // we use extendedLen instead of len if it is set 
-                            // dont add them together or something
-                            std::cout << "extended len 1: " << (int) extendedLen1 << "\n";
+                        EncodePayload(payload, payloadLen, &frameLen, response, 512); 
 
-                            maskByteStart = 6;  
-                        }         
-                        else if (len == 127) {
-                            // payload length is 32 bits + 16 bits
-                            // TODO: 
-                        }          
+                        int sendResult = send(pollFdInfo.pollFds[i].fd, response, frameLen, 0); 
 
-                        uint8_t maskKey[4];
-
-                        maskKey[0] = buffer[maskByteStart];
-                        maskKey[1] = buffer[maskByteStart + 1];
-                        maskKey[2] = buffer[maskByteStart + 2];
-                        maskKey[3] = buffer[maskByteStart + 3];  
-
-                        std::cout << "mask key 0: " << (int) maskKey[0] << "\n";
-                        std::cout << "mask key 1: " << (int) maskKey[1] << "\n";
-                        std::cout << "mask key 2: " << (int) maskKey[2] << "\n";
-                        std::cout << "mask key 3: " << (int) maskKey[3] << "\n";
-
-                        // now actually decode the message
-                        uint16_t payloadStart = maskByteStart + 4; 
-                        uint16_t payloadLen = extendedLen1 ? extendedLen1 : len; 
-
-                        uint8_t decodedPayload[payloadLen + 1];
-                        memset((void*) decodedPayload, 0, payloadLen + 1); 
-
-                        for(uint16_t i = 0; i < payloadLen; i++) {
-                            decodedPayload[i] = buffer[payloadStart + i] ^ maskKey[i % 4]; 
+                        if (sendResult < 0) {
+                            std::cout << "send() failed!\n"; 
+                            return; 
                         }
-
-                        std::cout << "decoded: " << decodedPayload << "\n"; 
 
                     } else {
                         struct HttpResponse httpResponse;
