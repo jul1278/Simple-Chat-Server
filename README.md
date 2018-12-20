@@ -1,6 +1,8 @@
 # Simple-Chat-Server
 Simple work in progress WebSocket implementation
 
+requires openssl and NibbleAndAHalf 
+
 ```
 sh ./wss_build.sh
 ./wssmain 
