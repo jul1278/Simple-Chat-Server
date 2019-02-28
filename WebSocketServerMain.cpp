@@ -19,6 +19,8 @@
 #include <list>
 #include <assert.h>
 #include <signal.h>
+#include <algorithm>
+#include <cstring>
 
 #include <openssl/sha.h>
 #include <NibbleAndAHalf/base64.h>
@@ -34,7 +36,26 @@ unsigned int port = 5004;
 
 volatile int forceShutdownFlag = 0; 
 
+
+
 std::set<int> wsSockets; 
+
+// UserInfo
+struct UserInfo {
+
+    UserInfo() 
+    {}
+
+    UserInfo(const std::string& name, std::string color, int fd)
+    : name(name), color(color), fd(fd) 
+    {}
+
+    std::string name;
+    std::string color;
+    int fd; 
+};
+
+std::unordered_map<int, UserInfo> fdUserInfoMap; 
 
 enum ResponseType {
     GET, 
@@ -205,12 +226,12 @@ void DecodeFrame(uint8_t buffer[], uint16_t bufferLen, uint16_t payloadBufferLen
     uint16_t extendedLen1 = 0; 
     uint64_t extendedLen2 = 0; 
 
-    std::cout << "fin: " << (int) fin << "\n";
-    std::cout << "rsv1: " << (int) rsv1 << "\n";
-    std::cout << "rsv2: " << (int) rsv2 << "\n";
-    std::cout << "opcode: " << (int) opcode << "\n";  
-    std::cout << "mask: " << (int) mask << "\n"; 
-    std::cout << "len: " << (int) len << "\n"; 
+    //std::cout << "fin: " << (int) fin << "\n";
+    //std::cout << "rsv1: " << (int) rsv1 << "\n";
+    //std::cout << "rsv2: " << (int) rsv2 << "\n";
+    //std::cout << "opcode: " << (int) opcode << "\n";  
+    //std::cout << "mask: " << (int) mask << "\n"; 
+    //std::cout << "len: " << (int) len << "\n"; 
 
     if (len == 126) {
         // we have to look at the extended payload len
@@ -221,7 +242,7 @@ void DecodeFrame(uint8_t buffer[], uint16_t bufferLen, uint16_t payloadBufferLen
         
         // we use extendedLen instead of len if it is set 
         // dont add them together or something
-        std::cout << "extended len 1: " << (int) extendedLen1 << "\n";
+        //std::cout << "extended len 1: " << (int) extendedLen1 << "\n";
 
         maskByteStart = 6;  
     }         
@@ -237,10 +258,10 @@ void DecodeFrame(uint8_t buffer[], uint16_t bufferLen, uint16_t payloadBufferLen
     maskKey[2] = buffer[maskByteStart + 2];
     maskKey[3] = buffer[maskByteStart + 3];  
 
-    std::cout << "mask key 0: " << (int) maskKey[0] << "\n";
-    std::cout << "mask key 1: " << (int) maskKey[1] << "\n";
-    std::cout << "mask key 2: " << (int) maskKey[2] << "\n";
-    std::cout << "mask key 3: " << (int) maskKey[3] << "\n";
+    // std::cout << "mask key 0: " << (int) maskKey[0] << "\n";
+    // std::cout << "mask key 1: " << (int) maskKey[1] << "\n";
+    // std::cout << "mask key 2: " << (int) maskKey[2] << "\n";
+    // std::cout << "mask key 3: " << (int) maskKey[3] << "\n";
 
     // now actually decode the message
     uint16_t payloadStart = maskByteStart + 4; 
@@ -508,6 +529,51 @@ void SortHttpResponse(struct HttpResponse& httpResponse, ServerResources& server
 }
 
 //------------------------------------------------------------------------------------
+// Name: ParseDataMessage
+// Desc:
+//------------------------------------------------------------------------------------
+void ParseDataMessage(UserInfo& userInfo, std::string& message, uint8_t* buffer, uint16_t bufferSize) {
+    
+    if (bufferSize == 0) {
+        return; 
+    }
+
+    std::cout << "buffer: " << buffer << std::endl; 
+
+    char separatorChar = '\n'; 
+    size_t lastSeparatorIndex = 0; 
+
+    auto nameFieldStr = "name:"; 
+    auto colorFieldStr = "color:"; 
+    auto chatFieldStr = "chat:";
+
+    auto nextSeparatorIndex = lastSeparatorIndex; 
+
+    while (buffer[nextSeparatorIndex] != separatorChar && ++nextSeparatorIndex < bufferSize) {}
+
+    if (nextSeparatorIndex <= bufferSize) {
+
+        if (nextSeparatorIndex > lastSeparatorIndex) {
+            if ( strncmp( nameFieldStr, (const char*) &buffer[lastSeparatorIndex], strlen(nameFieldStr)) )  {
+                auto offset = lastSeparatorIndex + strlen(nameFieldStr); 
+                userInfo.name = std::string(buffer[offset], nextSeparatorIndex - offset); 
+            }   
+            else if ( strncmp( colorFieldStr, (const char*)  &buffer[lastSeparatorIndex], strlen(colorFieldStr)) )  {
+                auto offset = lastSeparatorIndex + strlen(colorFieldStr); 
+                userInfo.color = std::string(buffer[offset], nextSeparatorIndex - offset); 
+            }
+            else if ( strncmp( chatFieldStr, (const char*) &buffer[lastSeparatorIndex], strlen(chatFieldStr)) )  {
+                auto offset = lastSeparatorIndex + strlen(chatFieldStr); 
+                message = std::string(buffer[offset], nextSeparatorIndex - offset); 
+            }
+        }
+    } else {
+        std::cout << "Error parsing datamessage - ParseDataMessage()\n";
+        std::cout << "nextSeparatorIndex: " << nextSeparatorIndex << " bufferSize: " << bufferSize << "\n";  
+    }   
+}
+
+//------------------------------------------------------------------------------------
 // Name: ProcessFds
 // Desc:
 //------------------------------------------------------------------------------------
@@ -575,7 +641,16 @@ void ProcessFds(PollFdInfo& pollFdInfo, int listeningFd, ServerResources& server
                         uint16_t payloadLen; 
                         DecodeFrame(buffer, bufferSize, 1024, payload, &payloadLen); 
 
-                        std::cout << "decoded: " << payload << "\n"; 
+                        // std::cout << "decoded: " << payload << "\n"; 
+
+                        char splitChar = '|';
+                        // split by split character
+                        UserInfo info; 
+                        std::string message; 
+
+                        ParseDataMessage(info, message, payload, payloadLen); 
+
+                        std::cout << message << std::endl; 
 
                         uint8_t response[512]; 
                         uint16_t frameLen = 0;
