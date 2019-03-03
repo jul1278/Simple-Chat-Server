@@ -67,6 +67,7 @@
 
         // Let us open a web socket
         var ws = new WebSocket('ws://%ip%:5004/chat'); 
+        var notifCount = 0; 
         
         //112.213.165.52:5004/chat");
 
@@ -102,6 +103,18 @@
 
                 document.getElementById("result").innerHTML += "<font color=\"" + color + "\">" + name + ": " + msg + "</font>";
                 document.getElementById("result").innerHTML += "\n";
+                
+                if (document.hidden) {
+                    notifCount++; 
+
+                    var newTitle = '(' + notifCount + ') ' + 'Julians Chat Server';
+                    document.title = newTitle;
+                } else {
+                    notifCount = 0; 
+
+                    var newTitle = 'Julians Chat Server';
+                    document.title = newTitle;
+                }
 
                 console.log(received_msg); 
             };
@@ -150,6 +163,7 @@
             tmp.innerHTML = html;
             return tmp.textContent || tmp.innerText || "";
         }
+
         
     </script>
 

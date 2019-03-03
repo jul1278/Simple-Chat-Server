@@ -662,12 +662,19 @@ void ProcessFds(PollFdInfo& pollFdInfo, int listeningFd, ServerResources& server
 
                         EncodePayload(payload, payloadLen, &frameLen, response, 512); 
 
-                        int sendResult = send(pollFdInfo.pollFds[i].fd, response, frameLen, 0); 
+                        for (auto socketFd : wsSockets) {
+                            
+                            //int sendResult = send(pollFdInfo.pollFds[i].fd, response, frameLen, 0); 
+                            int sendResult = send(socketFd, response, frameLen, 0); 
 
-                        if (sendResult < 0) {
-                            std::cout << "send() failed!\n"; 
-                            return; 
+                            if (sendResult < 0) {
+                                std::cout << "send() to FD: " << socketFd << " failed!\n"; 
+                                wsSockets.erase(socketFd); 
+                                return; 
+                            }
                         }
+
+
 
                     } else {
                         struct HttpResponse httpResponse;
