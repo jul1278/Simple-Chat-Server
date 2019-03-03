@@ -66,7 +66,7 @@
     <script type="text/javascript">
 
         // Let us open a web socket
-        var ws = new WebSocket("ws://112.213.165.52:5004/chat");
+        var ws = new WebSocket("ws:%ip%:%port%/chat"); //112.213.165.52:5004/chat");
 
         if ("WebSocket" in window)
         {
@@ -85,6 +85,7 @@
                 var result = received_msg.split("\n"); 
                 var name = "";
                 var msg = ""; 
+                var color = ""; 
 
                 for (var i = 0; i < result.length; i++) {
                     if (result[i].startsWith("chat:")) {
@@ -92,10 +93,12 @@
                     }
                     else if (result[i].startsWith("name:")) {
                         name = result[i].split(":")[1]; 
+                    }else if (result[i].startsWith("color:")) {
+                        color = result[i].split(":")[1]; 
                     }
                 }
 
-                document.getElementById("result").innerHTML += name + ": " + msg;
+                document.getElementById("result").innerHTML += "<font color=\"" + color + "\">" + name + ": " + msg + "</font>";
                 document.getElementById("result").innerHTML += "\n";
 
                 console.log(received_msg); 
@@ -118,12 +121,32 @@
         }
 
         function sendMessage(data) {
-            var col = document.getElementById("colorDropdown").value;
-            var name = document.getElementById("nameText").value;
 
-            var msg = "name:" + name + "\n" + "color:" + col + "\n" + "chat:" + data + "\n"; 
+            if (data.length == 0) {
+                return; 
+            }
 
-            ws.send(msg);
+            var tmp = strip(data); 
+            var col = strip(document.getElementById("colorDropdown").value);
+            var name = strip(document.getElementById("nameText").value);
+
+            if (name.length == 0) {
+                document.getElementById("result").innerHTML += "<font color=\"red\">Server: Please choose a name!</font>\n"; 
+            } else {
+
+                var msg = "name:" + name + "\n" + "color:" + col + "\n" + "chat:" + tmp + "\n"; 
+                ws.send(msg);
+
+                document.getElementById('test').value = ""; 
+            }
+        }
+
+        // STOLEN: https://stackoverflow.com/questions/822452/strip-html-from-text-javascript
+        function strip(html)
+        {
+            var tmp = document.createElement("DIV");
+            tmp.innerHTML = html;
+            return tmp.textContent || tmp.innerText || "";
         }
         
     </script>

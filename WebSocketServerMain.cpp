@@ -21,6 +21,7 @@
 #include <signal.h>
 #include <algorithm>
 #include <cstring>
+#include <netdb.h>
 
 #include <openssl/sha.h>
 #include <NibbleAndAHalf/base64.h>
@@ -36,7 +37,7 @@ unsigned int port = 5004;
 
 volatile int forceShutdownFlag = 0; 
 
-
+std::string serverHost = "localhost";  
 
 std::set<int> wsSockets; 
 
@@ -199,6 +200,10 @@ void EncodePayload(const uint8_t* message, uint16_t messageLen, uint16_t* frameL
     *frameLen = 2 + messageLen; 
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+// Name: 
+// Desc: 
+//---------------------------------------------------------------------------------------------------------------------
 void EncodePayload(const std::string& message, uint16_t* frameLen, uint8_t* buffer, uint16_t bufLen) {
     EncodePayload( (const uint8_t*) message.c_str(), message.size(), frameLen, buffer, bufLen); 
 }
@@ -697,7 +702,7 @@ void HandleSigInt(int signal) {
 // Name
 // Desc:
 //-------------------------------------------------------------------------------------------
-int main() {
+int main(int argc, char** argv) {
    
     // dont want to get signal crash 
     // we can handle errors     
@@ -707,9 +712,7 @@ int main() {
     signal(SIGINT, HandleSigInt);
 
     sockaddr_in serv_addr;
-    
-    ServerResources resources; 
-    resources.LoadResource("ws.html");
+
 
     // create a new socket
     // SOCK_STREAM indicates that we want a TCP socket
@@ -784,6 +787,44 @@ int main() {
         std::cout << "listen() failed.\n"; 
         return 0; 
     }
+
+    // program argument is so far just: -ip
+    // so we'll ignore the first arg because that is the command line
+    // confirm that argument 2 is just "-ip" then arg 3 is an ip address
+    for (auto i = 0; i < argc; i++) {
+        std::cout << i << " " << argv[i] << std::endl; 
+    }
+
+    if (argc > 2) {
+        if ( strncmp(argv[1], "-ip", 3) == 0 ) {
+            int count = 0; 
+            int i = 0;
+            char c; 
+
+            while ( argv[2][i] ) {
+                if ( argv[2][i] == '.' ) {
+                    count++;
+                }
+
+                i++;
+            }
+
+            if (count == 3) {
+                serverHost.assign(argv[2]); 
+                std::cout << "ip: " << serverHost << std::endl; 
+
+            } else {
+                std::cout << "Given IP address: " << argv[2] << " is invalid\n"; 
+            } 
+        } else {
+            std::cout << "ip argument not given\n"; 
+        }
+    } 
+
+        
+    ServerResources resources; 
+    resources.SetWildcard("%ip%", serverHost);
+    resources.LoadResource("ws.html");
 
     while(forceShutdownFlag == 0) {
         
